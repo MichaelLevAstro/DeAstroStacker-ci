@@ -11,6 +11,11 @@ name: build
 #
 #     gh workflow run build.yml -R MichaelLevAstro/DeAstroStacker-ci -f ref=main
 #
+# Every platform is built here, not only the macOS ones. Standard runners are
+# free on a public repository whatever they run on, so there is nothing saved by
+# building Windows anywhere else - and a release wants all four legs on it at
+# once, which cannot happen if they are made in two repositories.
+#
 # The tests are deliberately not run here. Runs, logs and artifacts on a public
 # repository are readable by anyone, and a failing assertion prints the source
 # lines around it - which belong to a private repository. Testing stays local,
@@ -23,9 +28,13 @@ on:
         description: "Branch, tag or SHA of DeAstroStacker to build"
         type: string
         default: main
+      release:
+        description: "Publish the installers as a release the app can update from"
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -47,6 +56,15 @@ jobs:
           - os: macos-14
             label: macos-arm64
             artifact: dist/*.dmg
+          # macos-13 was the last Intel image and has been retired; a job asking
+          # for it queues for ever rather than failing. macos-15-intel is the
+          # replacement, and an Intel Mac cannot run an arm64 build at all.
+          - os: macos-15-intel
+            label: macos-x86_64
+            artifact: dist/*.dmg
+          - os: windows-latest
+            label: windows
+            artifact: dist/*-Setup.exe
 
     steps:
       # persist-credentials: false keeps the token out of .git/config. A public
@@ -93,3 +111,74 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
           retention-days: 14
+
+  # One release per version, with every platform's installer on it. This is what
+  # the app's own "check for updates" reads and what a download button on a
+  # website links to: the tag is the version, and
+  # /releases/latest/download/<name> is a stable URL that always points at the
+  # newest one - no API call, no scraping, no knowing the version in advance.
+  #
+  # Here rather than in the private repository, because a release the app can
+  # reach has to be public and this is the public one.
+  release:
+    name: release
+    needs: build
+    if: inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      # the source again, for the version, and nothing else of it is used.
+      # persist-credentials keeps the token out of the workspace exactly as it
+      # does in the build legs.
+      - name: Source
+        uses: actions/checkout@v4
+        with:
+          repository: MichaelLevAstro/DeAstroStacker
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+
+      - name: Read the version
+        id: version
+        shell: bash
+        run: |
+          version=$(python -c "import deastrostacker, sys; sys.stdout.write(deastrostacker.__version__)")
+          test -n "$version" || { echo 'no __version__ found'; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      # flattened, and renamed to carry the platform: two files called
+      # DeAstroStacker.dmg in two folders are two files a browser cannot tell
+      # apart once they are in the same download directory
+      - name: Gather the installers
+        shell: bash
+        run: |
+          mkdir -p release
+          for one in downloaded/*/*; do
+            [ -f "$one" ] || continue
+            cp "$one" "release/$(basename "$(dirname "$one")")-$(basename "$one")"
+          done
+          ls -l release
+          test -n "$(ls -A release)" || { echo 'nothing to release'; exit 1; }
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: DeAstroStacker ${{ steps.version.outputs.version }}
+          files: release/*
+          fail_on_unmatched_files: true
+          body: |
+            DeAstroStacker ${{ steps.version.outputs.version }}.
+
+            **macOS**: the app is not signed by Apple, so the first launch is
+            refused. One line clears it, and it is only ever needed once:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/DeAstroStacker.app
+            ```
+
+            **Windows**: SmartScreen will warn for the same reason - More info,
+            then Run anyway.
