@@ -1,0 +1,90 @@
+name: skill
+
+# The folder of markdown a client reads before it drives the connector, bundled
+# and published as one archive the app can fetch.
+#
+# Here rather than in the private repository for the same reason the installers
+# are: what the app downloads has to be public, and this is the public one. The
+# sources are checked out of the private repository with a read-only token and
+# nothing of them is left behind but the zip.
+#
+# Manual only, like everything here:
+#
+#     gh workflow run skill.yml -R MichaelLevAstro/DeAstroStacker-ci -f ref=main
+#
+# **A fixed tag, not a version one.** The app fetches
+# /releases/download/skill/skill.json - an address that never goes stale and
+# needs no API call - and `releases/latest` has to go on meaning the app's own
+# newest installer. So every run replaces what is on the `skill` tag rather than
+# making a release beside it.
+#
+# The skill and the app release on different clocks on purpose: a sentence in
+# SKILL.md that turns out to mislead a model should be fixable in an afternoon,
+# not at the next release of a stacker.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA of DeAstroStacker to bundle the skill from"
+        type: string
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: bundle and publish
+    runs-on: ubuntu-latest
+    steps:
+      # persist-credentials: false keeps the token out of .git/config. A public
+      # repository's workspace is not somewhere to leave a credential that can
+      # read a private one.
+      - name: Source
+        uses: actions/checkout@v4
+        with:
+          repository: MichaelLevAstro/DeAstroStacker
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # stdlib only - zipfile, hashlib, json. Nothing to install.
+      - name: Bundle
+        run: python packaging/skill_bundle.py --out dist
+
+      - name: Read the version
+        id: version
+        shell: bash
+        run: |
+          version=$(cat skill/VERSION)
+          test -n "$version" || { echo 'no skill/VERSION found'; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cat dist/skill.json
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skill
+          name: DeAstroStacker skill ${{ steps.version.outputs.version }}
+          files: |
+            dist/deastrostacker-skill.zip
+            dist/skill.json
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          body: |
+            The skill DeAstroStacker installs into an AI client, version
+            ${{ steps.version.outputs.version }}.
+
+            Fetched by the app itself: Settings → AI clients and the command
+            line → Skill, on the row of the client you want taught. The zip is
+            also what Claude Desktop wants uploaded by hand, since it has no
+            folder to write to.
+
+            This tag always holds the newest skill; it is replaced in place
+            rather than released beside, so the address the app reads never goes
+            stale.
