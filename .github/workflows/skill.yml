@@ -12,11 +12,18 @@ name: skill
 #
 #     gh workflow run skill.yml -R MichaelLevAstro/DeAstroStacker-ci -f ref=main
 #
-# **A fixed tag, not a version one.** The app fetches
-# /releases/download/skill/skill.json - an address that never goes stale and
+# **One tag per major version, replaced in place.** An app fetches
+# /releases/download/<channel>/skill.json - an address that never goes stale and
 # needs no API call - and `releases/latest` has to go on meaning the app's own
-# newest installer. So every run replaces what is on the `skill` tag rather than
-# making a release beside it.
+# newest installer. So every run replaces what is on its channel's tag rather
+# than making a release beside it.
+#
+# The channel is the skill's major version: 1.x on `skill`, N.x on `skill-N`.
+# Every app up to 0.11.4 fetches `skill` and installs whatever is there, and a
+# 2.x names tools their connectors do not have - so nothing past 1.x may ever be
+# published there. An app from 0.11.5 on reads the channel of the skill it
+# carries, and refuses a skill whose manifest `needs` a newer app than itself.
+# The major goes up only when the tools change under the skill.
 #
 # The skill and the app release on different clocks on purpose: a sentence in
 # SKILL.md that turns out to mislead a model should be fixable in an afternoon,
@@ -63,19 +70,30 @@ jobs:
         run: |
           version=$(cat skill/VERSION)
           test -n "$version" || { echo 'no skill/VERSION found'; exit 1; }
+          major=${version%%.*}
+          case "$major" in ''|*[!0-9]*) echo "not a version: $version"; exit 1;; esac
+          # the app's own rule, deastrostacker.skill.channel: 1.x keeps the tag
+          # old apps read, every later major gets a tag of its own
+          if [ "$major" -le 1 ]; then tag=skill; else tag="skill-$major"; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publishing $version on $tag"
           cat dist/skill.json
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: skill
+          tag_name: ${{ steps.version.outputs.tag }}
           name: DeAstroStacker skill ${{ steps.version.outputs.version }}
           files: |
             dist/deastrostacker-skill.zip
             dist/skill.json
           fail_on_unmatched_files: true
           overwrite_files: true
+          # never Latest: every installed app's update check reads
+          # releases/latest as the newest app, and a skill release created after
+          # the last one would take that from it
+          make_latest: false
           body: |
             The skill DeAstroStacker installs into an AI client, version
             ${{ steps.version.outputs.version }}.
@@ -85,6 +103,8 @@ jobs:
             also what Claude Desktop wants uploaded by hand, since it has no
             folder to write to.
 
-            This tag always holds the newest skill; it is replaced in place
-            rather than released beside, so the address the app reads never goes
-            stale.
+            This tag always holds the newest skill of its major version; it is
+            replaced in place rather than released beside, so the address the
+            app reads never goes stale. Each major has its own tag - `skill` for
+            1.x, `skill-N` after - and an app only reads the one its own skill
+            belongs to.
