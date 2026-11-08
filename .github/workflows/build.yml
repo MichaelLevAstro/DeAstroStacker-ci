@@ -52,8 +52,9 @@ jobs:
             artifact: dist/*.tar.gz
           # The standard three-core M1 image, which is the free tier for a
           # public repository. The xlarge macOS labels are billed even here, so
-          # they are not an upgrade to reach for.
-          - os: macos-14
+          # they are not an upgrade to reach for. macos-14 was retired in
+          # November 2026: a job asking for it is cancelled before it starts.
+          - os: macos-15
             label: macos-arm64
             artifact: dist/*.dmg
           # macos-13 was the last Intel image and has been retired; a job asking
